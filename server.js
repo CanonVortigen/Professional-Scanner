@@ -14,11 +14,32 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+wss.on('error', (err) => {
+  console.error('[WS] WebSocket.Server error:', err);
+});
+
+server.on('error', (err) => {
+  console.error('[HTTP] HTTP Server error:', err);
+});
+
 const PORT = process.env.PORT || 3000;
 
 // Serve static files from public directory
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json({ limit: '5mb' }));
+
+let lastScanSnapshot = [];
+
+app.get('/api/scan-results', (req, res) => {
+  res.json({
+    updated: Date.now(),
+    results: lastScanSnapshot
+  });
+});
+
+app.get('/map', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'map.html'));
+});
 
 app.post('/export-xlsx', async (req, res) => {
   const results = Array.isArray(req.body.results) ? req.body.results : [];
@@ -35,10 +56,15 @@ app.post('/export-xlsx', async (req, res) => {
     { header: 'Sistema Operacional', key: 'os', width: 20 },
     { header: 'VM', key: 'vm', width: 10 },
     { header: 'Domínio AD', key: 'adDomain', width: 20 },
+    { header: 'VLAN', key: 'vlan', width: 12 },
+    { header: 'Sub-rede', key: 'subnet', width: 18 },
+    { header: 'DMZ', key: 'dmz', width: 8 },
+    { header: 'Ambiente', key: 'environment', width: 12 },
+    { header: 'Tipo', key: 'deviceType', width: 18 },
     { header: 'Portas Abertas (Serviços)', key: 'ports', width: 48 }
   ];
 
-  worksheet.autoFilter = 'A1:I1';
+  worksheet.autoFilter = 'A1:N1';
   worksheet.views = [{ state: 'frozen', ySplit: 1 }];
 
   worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
@@ -49,8 +75,9 @@ app.post('/export-xlsx', async (req, res) => {
   };
 
   for (const [index, host] of results.entries()) {
-    const portsStr = host.ports && host.ports.length > 0
-      ? host.ports.map(p => `${p.port}/${p.protocol} (${p.service})`).join(', ')
+    const ports = Array.isArray(host.ports) ? host.ports : [];
+    const portsStr = ports.length > 0
+      ? ports.map(p => `${p.port}/${p.protocol} (${p.service})`).join(', ')
       : 'Nenhuma';
 
     worksheet.addRow({
@@ -62,6 +89,11 @@ app.post('/export-xlsx', async (req, res) => {
       os: host.os,
       vm: host.vm || 'Não',
       adDomain: host.adDomain || 'N/A',
+      vlan: host.vlan || 'N/A',
+      subnet: host.subnet || 'N/A',
+      dmz: host.isDMZ ? 'Sim' : 'Não',
+      environment: host.environment || 'IT',
+      deviceType: host.deviceType || 'Host Ativo',
       ports: portsStr
     });
 
@@ -186,6 +218,12 @@ const TCP_SERVICES = {
   3389: { name: 'RDP', probe: null },
   8080: { name: 'HTTP-Proxy', probe: 'GET / HTTP/1.0\r\n\r\n' }
 };
+
+// Add common OT/ICS ports for detection
+TCP_SERVICES[502] = { name: 'Modbus', probe: null };
+TCP_SERVICES[44818] = { name: 'EtherNet/IP', probe: null };
+TCP_SERVICES[102] = { name: 'S7Comm (Siemens)', probe: null };
+TCP_SERVICES[20000] = { name: 'DNP3', probe: null };
 
 const UDP_SERVICES = {
   53: 'DNS',
@@ -474,16 +512,28 @@ function getCsvTargetDir() {
 function getADDomain() {
   try {
     // Primeiro tenta obter via WMIC
-    const output = execSync('wmic computersystem get domain', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    const lines = output.split('\n').filter(l => l.trim() !== '');
-    if (lines.length >= 2 && lines[1].trim()) {
-      return lines[1].trim();
+    try {
+      const output = execSync('wmic computersystem get domain', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 });
+      const lines = output.split('\n').filter(l => l.trim() !== '');
+      if (lines.length >= 2 && lines[1].trim()) {
+        return lines[1].trim();
+      }
+    } catch (wmic_err) {
+      console.warn('[WARN] WMIC failed:', wmic_err.message);
     }
+    
     // Fallback usando PowerShell (mais universal em Windows modernos)
-    const psOutput = execSync('powershell -NoProfile -Command "(Get-WmiObject -Class Win32_ComputerSystem).Domain"', { encoding: 'utf8' });
-    const domain = psOutput.toString().trim();
-    return domain || 'N/A';
+    try {
+      const psOutput = execSync('powershell -NoProfile -Command "(Get-WmiObject -Class Win32_ComputerSystem).Domain"', { encoding: 'utf8', timeout: 2000 });
+      const domain = psOutput.toString().trim();
+      return domain || 'N/A';
+    } catch (ps_err) {
+      console.warn('[WARN] PowerShell failed:', ps_err.message);
+    }
+    
+    return 'N/A';
   } catch (e) {
+    console.warn('[WARN] getADDomain error:', e.message);
     return 'N/A';
   }
 }
@@ -499,6 +549,129 @@ function detectVM(mac, vendor) {
   return (isVmMac || isVmVendor) ? 'Sim' : 'Não';
 }
 
+// Helper: infer /24 subnet CIDR from IP
+function getSubnetCidr(ip) {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return 'N/A';
+  return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+}
+
+function isPrivateIp(ip) {
+  const num = ipToLong(ip);
+  // 10.0.0.0/8
+  if (num >= ipToLong('10.0.0.0') && num <= ipToLong('10.255.255.255')) return true;
+  // 172.16.0.0/12
+  if (num >= ipToLong('172.16.0.0') && num <= ipToLong('172.31.255.255')) return true;
+  // 192.168.0.0/16
+  if (num >= ipToLong('192.168.0.0') && num <= ipToLong('192.168.255.255')) return true;
+  return false;
+}
+
+function isPublicIp(ip) {
+  return !isPrivateIp(ip);
+}
+
+// DMZ heuristics: public IP or common public services on vendor/firewall hosts or explicit hostname hints
+function detectDMZ(host) {
+  const ports = host.ports || [];
+  const hasWeb = ports.some(p => p.port === 80 || p.port === 443 || p.port === 8080);
+  const vendor = (host.vendor || '').toLowerCase();
+  const hostname = (host.hostname || '').toLowerCase();
+
+  if (isPublicIp(host.ip)) return true;
+  if (hasWeb && (vendor.includes('cisco') || vendor.includes('fortinet') || vendor.includes('juniper') || hostname.includes('dmz') || hostname.includes('fw') || hostname.includes('firewall'))) return true;
+  return false;
+}
+
+// OT/ICS heuristics: common ports or hostname keywords
+function detectOTICS(host) {
+  const icsPorts = [502, 44818, 102, 20000];
+  const ports = host.ports || [];
+  const openPorts = ports.map(p => p.port);
+  const matches = icsPorts.filter(p => openPorts.includes(p));
+  if (matches.length > 0) return { isOT: true, reasons: [`Ports: ${matches.join(',')}`] };
+
+  const hostname = (host.hostname || '').toLowerCase();
+  if (hostname.includes('plc') || hostname.includes('scada') || hostname.includes('hmi') || hostname.includes('rtu')) {
+    return { isOT: true, reasons: ['Hostname indicates OT/ICS'] };
+  }
+
+  const vendor = (host.vendor || '').toLowerCase();
+  if (vendor.includes('siemens') || vendor.includes('schneider') || vendor.includes('rockwell') || vendor.includes('schweitzer')) {
+    return { isOT: true, reasons: ['Vendor suggests industrial device'] };
+  }
+
+  return { isOT: false, reasons: [] };
+}
+
+function detectDeviceType(host) {
+  const hostname = (host.hostname || '').toLowerCase();
+  const vendor = (host.vendor || '').toLowerCase();
+  const os = (host.os || '').toLowerCase();
+  const ports = host.ports || [];
+  const portSet = new Set(ports.map(p => p.port));
+
+  const isPrinter = hostname.includes('printer') || hostname.includes('canon') || hostname.includes('epson') || hostname.includes('hp') || hostname.includes('brother') || vendor.includes('hp') && !vendor.includes('hyper-v') || vendor.includes('canon') || vendor.includes('epson') || vendor.includes('lexmark');
+  if (isPrinter || portSet.has(9100) || portSet.has(515) || portSet.has(631)) {
+    return 'Impressora';
+  }
+
+  const isRouter = hostname.includes('router') || hostname.includes('rtr') || hostname.includes('gw') || hostname.includes('gateway') || vendor.includes('juniper') || vendor.includes('mikrotik') || vendor.includes('cisco') && (portSet.has(23) || portSet.has(80) || portSet.has(161));
+  if (isRouter) {
+    return 'Roteador';
+  }
+
+  const isSwitch = hostname.includes('switch') || vendor.includes('hpe') || vendor.includes('cisco') || vendor.includes('aruba') || vendor.includes('juniper') || vendor.includes('h3c');
+  if (isSwitch && !isRouter) {
+    return 'Switch';
+  }
+
+  const isContainer = hostname.includes('container') || hostname.includes('k8s') || hostname.includes('pod') || vendor.includes('docker') || vendor.includes('kubernetes');
+  if (isContainer) {
+    return 'Container';
+  }
+
+  const isIoT = hostname.includes('cam') || hostname.includes('sensor') || hostname.includes('thermo') || hostname.includes('hue') || hostname.includes('nest') || hostname.includes('ring') || hostname.includes('sonoff') || vendor.includes('xiaomi') || vendor.includes('philips') || vendor.includes('samsung') || vendor.includes('raspberry pi');
+  if (isIoT) {
+    return 'IoT';
+  }
+
+  if (host.vm === 'Sim') {
+    return 'Máquina virtual';
+  }
+
+  if (portSet.has(80) || portSet.has(443) || portSet.has(3306) || portSet.has(1433) || portSet.has(3389) || portSet.has(22) || portSet.has(21) || hostname.includes('srv') || hostname.includes('server') || hostname.includes('web') || hostname.includes('db')) {
+    return 'Servidor';
+  }
+
+  const isPC = os.includes('windows') || os.includes('linux') || hostname.includes('pc') || hostname.includes('desktop');
+  if (isPC) {
+    return 'PC';
+  }
+
+  if (host.status === 'Ativo') {
+    return 'Host Ativo';
+  }
+
+  return 'Inativo';
+}
+
+// Group inferred VLANs by subnet and assign simple VLAN identifiers
+function assignVlansToHosts(hosts) {
+  const groups = {};
+  hosts.forEach(h => {
+    const subnet = h.subnet || getSubnetCidr(h.ip);
+    if (!groups[subnet]) groups[subnet] = [];
+    groups[subnet].push(h);
+  });
+
+  const subnets = Object.keys(groups);
+  subnets.forEach((subnet, idx) => {
+    const vlanId = `VLAN-${idx + 1}`;
+    groups[subnet].forEach(h => h.vlan = vlanId);
+  });
+}
+
 // WebSocket handler
 wss.on('connection', (ws) => {
   console.log('[WS] Novo cliente conectado');
@@ -506,11 +679,14 @@ wss.on('connection', (ws) => {
   ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message);
+      console.log('[WS] Mensagem recebida:', data.type);
 
       if (data.type === 'start') {
         const { target, portsTCP, portsUDP, timeout, concurrency, scanUdp } = data;
+        console.log('[WS] Iniciando varredura para alvo:', target);
         
         const ipList = parseTarget(target);
+        console.log('[WS] IPs parseados:', ipList.length, 'IPs');
         if (ipList.length === 0) {
           ws.send(JSON.stringify({ type: 'error', message: 'Alvo inválido! Insira um IP, faixa (ex: 192.168.1.1-50) ou CIDR (ex: 192.168.1.0/24).' }));
           return;
@@ -521,17 +697,35 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({ type: 'log', message: `[*] Configurações: Threads/Concorrência=${concurrency}, Timeout=${timeout}ms` }));
 
         const startTime = Date.now();
+        ws.currentScan = { cancelled: false, startTime };
         let activeCount = 0;
         let inactiveCount = 0;
         const hasPorts = (portsTCP && portsTCP.length > 0) || (scanUdp && portsUDP && portsUDP.length > 0);
+
+        // Helper function to safely send messages
+        const sendSafeMsg = (msg) => {
+          try {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify(msg));
+            }
+          } catch (err) {
+            console.error('[ERROR] Failed to send message:', err.message);
+          }
+        };
 
         // 1. Host Discovery Stage
         ws.send(JSON.stringify({ type: 'log', message: `[~] FASE 1: Varredura de Hosts Ativos...` }));
         
         let completedPings = 0;
-        const pingTasks = ipList.map(ip => () => pingHost(ip, timeout));
+        const pingTasks = ipList.map(ip => () => {
+          if (ws.currentScan && ws.currentScan.cancelled) {
+            return Promise.resolve({ ip, active: false, ttl: 0, cancelled: true });
+          }
+          return pingHost(ip, timeout);
+        });
         
         const pingResults = await runConcurrent(pingTasks, concurrency, (res) => {
+          if (ws.currentScan && ws.currentScan.cancelled) return;
           completedPings++;
           const phase1Progress = Math.round((completedPings / ipList.length) * (hasPorts ? 30 : 50));
           ws.send(JSON.stringify({ type: 'progress', percent: phase1Progress }));
@@ -548,67 +742,118 @@ wss.on('connection', (ws) => {
 
         let completedDetails = 0;
         const detailTasks = pingResults.map(pingRes => async () => {
-          const { ip, active, ttl } = pingRes;
+          try {
+            if (ws.currentScan && ws.currentScan.cancelled) return;
+            const { ip, active, ttl } = pingRes;
 
-          if (active) {
-            activeCount++;
-            const hostname = await resolveHostname(ip);
-            const mac = await getMacAddress(ip);
-            const vendor = getVendorFromMac(mac);
-            const os = getOSFromTTL(ttl);
-            const vm = detectVM(mac, vendor);
-            const adDomain = getADDomain();
+            if (active) {
+              activeCount++;
+              let hostname = 'N/A';
+              let mac = 'N/A';
+              let vendor = 'Desconhecido';
+              let os = getOSFromTTL(ttl);
+              let vm = 'Não';
+              let adDomain = 'N/A';
 
-            const hostDetails = {
-              ip,
-              status: 'Ativo',
-              hostname,
-              mac,
-              vendor,
-              os,
-              vm,
-              adDomain,
-              ports: []
-            };
+              try {
+                hostname = await resolveHostname(ip);
+              } catch (err) {
+                console.warn(`[WARN] resolveHostname failed for ${ip}:`, err.message);
+              }
 
-            ws.send(JSON.stringify({ 
-              type: 'host_found', 
-              host: hostDetails,
-              log: `[i] Detalhes de ${ip}: Hostname=${hostname} | MAC=${mac} | Fabricante=${vendor} | OS OS=${os}`
-            }));
+              try {
+                mac = await getMacAddress(ip);
+              } catch (err) {
+                console.warn(`[WARN] getMacAddress failed for ${ip}:`, err.message);
+              }
 
-            activeHosts.push(hostDetails);
-          } else {
-            inactiveCount++;
-            const hostDetails = {
-              ip,
-              status: 'Inativo',
-              hostname: 'N/A',
-              mac: 'N/A',
-              vendor: 'N/A',
-              os: 'N/A',
-              vm: 'Não',
-              adDomain: 'N/A',
-              ports: []
-            };
+              vendor = getVendorFromMac(mac);
 
-            ws.send(JSON.stringify({ 
-              type: 'host_inactive', 
-              host: hostDetails,
-              log: `[-] Host Inativo: ${ip}`
-            }));
+              try {
+                vm = detectVM(mac, vendor);
+              } catch (err) {
+                console.warn(`[WARN] detectVM failed for ${ip}:`, err.message);
+              }
 
-            inactiveHosts.push(hostDetails);
+              try {
+                adDomain = getADDomain();
+              } catch (err) {
+                console.warn(`[WARN] getADDomain failed:`, err.message);
+              }
+
+              const hostDetails = {
+                ip,
+                status: 'Ativo',
+                hostname,
+                mac,
+                vendor,
+                os,
+                vm,
+                adDomain,
+                vlan: null,
+                subnet: getSubnetCidr(ip),
+                isDMZ: false,
+                environment: 'IT',
+                otReasons: [],
+                deviceType: 'Host Ativo',
+                ports: []
+              };
+
+              ws.send(JSON.stringify({ 
+                type: 'host_found', 
+                host: hostDetails,
+                log: `[i] Detalhes de ${ip}: Hostname=${hostname} | MAC=${mac} | Fabricante=${vendor} | OS=${os}`
+              }));
+
+              activeHosts.push(hostDetails);
+            } else {
+              inactiveCount++;
+              const hostDetails = {
+                ip,
+                status: 'Inativo',
+                hostname: 'N/A',
+                mac: 'N/A',
+                vendor: 'N/A',
+                os: 'N/A',
+                vm: 'Não',
+                adDomain: 'N/A',
+                vlan: null,
+                subnet: getSubnetCidr(ip),
+                isDMZ: false,
+                environment: 'IT',
+                otReasons: [],
+                deviceType: 'Inativo',
+                ports: []
+              };
+
+              ws.send(JSON.stringify({ 
+                type: 'host_inactive', 
+                host: hostDetails,
+                log: `[-] Host Inativo: ${ip}`
+              }));
+
+              inactiveHosts.push(hostDetails);
+            }
+
+            completedDetails++;
+            const phase2Start = hasPorts ? 30 : 50;
+            const phase2Weight = hasPorts ? 30 : 50;
+            const phase2Progress = phase2Start + Math.round((completedDetails / ipList.length) * phase2Weight);
+            ws.send(JSON.stringify({ type: 'progress', percent: phase2Progress }));
+          } catch (err) {
+            console.error('[ERROR] detailTasks error:', err.message);
+            completedDetails++;
           }
-
-          completedDetails++;
-          const phase2Start = hasPorts ? 30 : 50;
-          const phase2Weight = hasPorts ? 30 : 50;
-          const phase2Progress = phase2Start + Math.round((completedDetails / ipList.length) * phase2Weight);
-          ws.send(JSON.stringify({ type: 'progress', percent: phase2Progress }));
         });
 
         await runConcurrent(detailTasks, concurrency);
+
+        if (ws.currentScan && ws.currentScan.cancelled) {
+          const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+          lastScanSnapshot = [...activeHosts, ...inactiveHosts];
+          ws.send(JSON.stringify({ type: 'stopped', summary: { active: activeCount, inactive: inactiveCount, total: ipList.length, time: duration }, log: '[*] Varredura cancelada pelo usuário.' }));
+          return;
+        }
 
         // 3. Port Scanning Stage for Active Hosts
         if (activeHosts.length > 0 && hasPorts) {
@@ -619,12 +864,16 @@ wss.on('connection', (ws) => {
           let completedPortChecks = 0;
 
           for (const host of activeHosts) {
+            if (ws.currentScan && ws.currentScan.cancelled) break;
             const portTasks = [];
             
             // TCP Ports
             if (portsTCP && portsTCP.length > 0) {
               portsTCP.forEach(port => {
                 portTasks.push(async () => {
+                  if (ws.currentScan && ws.currentScan.cancelled) {
+                    return { port, protocol: 'TCP', state: 'closed', service: 'cancelled', version: 'N/A' };
+                  }
                   const res = await scanTcpPort(host.ip, port, timeout);
                   
                   completedPortChecks++;
@@ -648,6 +897,9 @@ wss.on('connection', (ws) => {
             if (scanUdp && portsUDP && portsUDP.length > 0) {
               portsUDP.forEach(port => {
                 portTasks.push(async () => {
+                  if (ws.currentScan && ws.currentScan.cancelled) {
+                    return { port, protocol: 'UDP', state: 'closed', service: 'cancelled', version: 'N/A' };
+                  }
                   const res = await scanUdpPort(host.ip, port, timeout);
                   
                   completedPortChecks++;
@@ -669,11 +921,46 @@ wss.on('connection', (ws) => {
 
             // Run port scan for this specific host
             const portResults = await runConcurrent(portTasks, concurrency);
+            if (ws.currentScan && ws.currentScan.cancelled) break;
             host.ports = portResults.filter(p => p.state === 'open' || p.state === 'filtered' || p.state === 'open | filtered');
+            host.deviceType = detectDeviceType(host);
+            ws.send(JSON.stringify({ type: 'host_update', host }));
           }
+        }
+        // Post-processing: assign VLANs by subnet and detect DMZ / OT indicators
+        if (activeHosts.length > 0) {
+          if (ws.currentScan && ws.currentScan.cancelled) {
+            const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+            lastScanSnapshot = [...activeHosts, ...inactiveHosts];
+            ws.send(JSON.stringify({ type: 'stopped', summary: { active: activeCount, inactive: inactiveCount, total: ipList.length, time: duration }, log: '[*] Varredura cancelada pelo usuário.' }));
+            return;
+          }
+          assignVlansToHosts(activeHosts);
+          let dmzCount = 0;
+          let otCount = 0;
+
+          activeHosts.forEach(h => {
+            // detect DMZ based on ports/vendor/hostname
+            h.isDMZ = detectDMZ(h);
+            if (h.isDMZ) dmzCount++;
+
+            const ot = detectOTICS(h);
+            if (ot.isOT) {
+              h.environment = 'OT/ICS';
+              h.otReasons = ot.reasons;
+              otCount++;
+            } else {
+              h.environment = h.environment || 'IT';
+            }
+          });
+
+          // send summary logs for DMZ/OT findings
+          ws.send(JSON.stringify({ type: 'log', message: `[i] DMZ detectadas: ${dmzCount} | Dispositivos OT/ICS detectados: ${otCount}` }));
         }
 
         const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+        lastScanSnapshot = [...activeHosts, ...inactiveHosts];
+
         ws.send(JSON.stringify({
           type: 'complete',
           summary: {
@@ -684,14 +971,22 @@ wss.on('connection', (ws) => {
           },
           log: `[*] Varredura Concluída! Total de IPs: ${ipList.length} | Ativos: ${activeCount} | Inativos: ${inactiveCount} | Tempo decorrido: ${duration}s`
         }));
+      } else if (data.type === 'stop') {
+        if (ws.currentScan && !ws.currentScan.cancelled) {
+          ws.currentScan.cancelled = true;
+          ws.send(JSON.stringify({ type: 'log', message: '[*] Parando varredura solicitada pelo usuário...' }));
+        } else {
+          ws.send(JSON.stringify({ type: 'log', message: '[i] Nenhuma varredura em andamento para parar.' }));
+        }
       } else if (data.type === 'export_csv') {
         const { results } = data;
         let csvContent = '\uFEFF'; // Add BOM for Excel UTF-8
-        csvContent += 'IP;Estado;Hostname;Endereço MAC;Fabricante;Sistema Operacional;VM;Domínio AD;Portas Abertas (Serviços)\r\n';
+        csvContent += 'IP;Estado;Hostname;Endereço MAC;Fabricante;Sistema Operacional;VM;Domínio AD;VLAN;Sub-rede;DMZ;Ambiente;Tipo;Portas Abertas (Serviços)\r\n';
 
         results.forEach(host => {
-          const portsStr = host.ports && host.ports.length > 0 
-            ? host.ports.map(p => `${p.port}/${p.protocol} (${p.service})`).join(', ')
+          const ports = Array.isArray(host.ports) ? host.ports : [];
+        const portsStr = ports.length > 0 
+            ? ports.map(p => `${p.port}/${p.protocol} (${p.service})`).join(', ')
             : 'Nenhuma';
           const row = [
               host.ip,
@@ -702,7 +997,12 @@ wss.on('connection', (ws) => {
               host.os,
               host.vm,
               host.adDomain,
-              `"${portsStr}"`
+              (host.vlan || 'N/A'),
+              (host.subnet || 'N/A'),
+              (host.isDMZ ? 'Sim' : 'Não'),
+              (host.environment || 'IT'),
+              (host.deviceType || 'Host Ativo'),
+              '"' + portsStr + '"'
             ].join(';');
 
           csvContent += row + '\r\n';
@@ -733,17 +1033,43 @@ wss.on('connection', (ws) => {
         }
       }
     } catch (err) {
-      console.error(err);
-      ws.send(JSON.stringify({ type: 'error', message: 'Erro no servidor durante a varredura.' }));
+      console.error('[ERROR] WebSocket message handler error:', err);
+      console.error('[ERROR] Stack:', err.stack);
+      try {
+        ws.send(JSON.stringify({ type: 'error', message: `Erro no servidor: ${err.message}` }));
+      } catch (sendErr) {
+        console.error('[ERROR] Failed to send error message to client:', sendErr.message);
+      }
     }
   });
 
   ws.on('close', () => {
     console.log('[WS] Cliente desconectado');
   });
+
+  ws.on('error', (err) => {
+    console.error('[WS] WebSocket error:', err.message);
+  });
 });
 
 // Start Express server
-server.listen(PORT, () => {
-  console.log(`[HTTP] Servidor rodando em http://localhost:${PORT}`);
-});
+function listenOnPort(port, maxRetries = 5) {
+  server.once('error', (err) => {
+    if (err.code === 'EADDRINUSE' && maxRetries > 0) {
+      const nextPort = port + 1;
+      console.warn(`[HTTP] Porta ${port} em uso, tentando porta ${nextPort}...`);
+      listenOnPort(nextPort, maxRetries - 1);
+    } else {
+      console.error('[HTTP] Erro ao iniciar servidor:', err);
+      process.exit(1);
+    }
+  });
+
+  server.listen(port, () => {
+    const addr = server.address();
+    const boundPort = addr && addr.port ? addr.port : port;
+    console.log(`[HTTP] Servidor rodando em http://localhost:${boundPort}`);
+  });
+}
+
+listenOnPort(PORT);

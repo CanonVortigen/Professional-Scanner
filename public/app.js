@@ -16,6 +16,7 @@ const scanUdpCheckbox = document.getElementById('scan-udp-checkbox');
 const concurrencyInput = document.getElementById('concurrency-input');
 const timeoutInput = document.getElementById('timeout-input');
 const startBtn = document.getElementById('start-btn');
+const stopBtn = document.getElementById('stop-btn');
 const exportBtn = document.getElementById('export-btn');
 const clearBtn = document.getElementById('clear-btn');
 const consoleOutput = document.getElementById('console-output');
@@ -37,6 +38,8 @@ function connectWebSocket() {
   const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${wsProtocol}//${window.location.host}`;
   
+  connectionBadge.textContent = 'Conectando...';
+  connectionBadge.className = 'badge badge-connecting';
   socket = new WebSocket(wsUrl);
 
   socket.onopen = () => {
@@ -45,17 +48,20 @@ function connectWebSocket() {
     logToConsole('[i] Conexão estabelecida com o servidor de varredura.', 'system-msg');
   };
 
-  socket.onclose = () => {
+  socket.onclose = (event) => {
     connectionBadge.textContent = 'Desconectado';
     connectionBadge.className = 'badge badge-disconnected';
-    logToConsole('[!] Conexão perdida. Tentando reconectar...', 'error-msg');
+    logToConsole(`[!] Conexão perdida (code=${event.code}${event.reason ? `, reason=${event.reason}` : ''}). Tentando reconectar...`, 'error-msg');
     setTimeout(connectWebSocket, 3000);
   };
 
   socket.onerror = (err) => {
     console.error('WebSocket Error:', err);
-    connectionBadge.textContent = 'Erro';
-    connectionBadge.className = 'badge badge-disconnected';
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      connectionBadge.textContent = 'Erro de conexão';
+      connectionBadge.className = 'badge badge-disconnected';
+      logToConsole(`[!] Erro no WebSocket: readyState=${socket.readyState}`, 'error-msg');
+    }
   };
 
   socket.onmessage = (event) => {
@@ -105,6 +111,12 @@ function handleServerMessage(data) {
       updateStats();
       break;
 
+    case 'host_update':
+      addOrUpdateHost(data.host);
+      if (data.log) logToConsole(data.log, 'accent-msg');
+      updateStats();
+      break;
+
     case 'port_result':
       const { ip, portResult } = data;
       const host = scanResults.find(h => h.ip === ip);
@@ -131,6 +143,15 @@ function handleServerMessage(data) {
         progressContainer.classList.add('hidden');
       }, 1500);
       if (data.log) logToConsole(data.log, 'success-msg');
+      endScan(data.summary);
+      break;
+
+    case 'stopped':
+      updateProgressBar(100);
+      setTimeout(() => {
+        progressContainer.classList.add('hidden');
+      }, 1500);
+      if (data.log) logToConsole(data.log, 'system-msg');
       endScan(data.summary);
       break;
 
@@ -231,6 +252,7 @@ function startScan() {
   startBtn.classList.add('pulse');
   startBtn.querySelector('.loader').classList.remove('hidden');
   startBtn.querySelector('.btn-text').textContent = 'Escaneando...';
+  stopBtn.disabled = false;
   exportBtn.disabled = true;
 
   // Clear previous results
@@ -259,6 +281,16 @@ function startScan() {
   }));
 }
 
+function stopScan() {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    alert('Erro: servidor desconectado. Não é possível parar a varredura.');
+    return;
+  }
+  stopBtn.disabled = true;
+  logToConsole('[*] Solicitando parada da varredura...', 'system-msg');
+  socket.send(JSON.stringify({ type: 'stop' }));
+}
+
 // End Scan process
 function endScan(summary, isError = false) {
   clearInterval(scanTimerInterval);
@@ -272,6 +304,7 @@ function endScan(summary, isError = false) {
   if (!isError && scanResults.length > 0) {
     exportBtn.disabled = false;
   }
+  stopBtn.disabled = true;
 
   if (summary) {
     statTime.textContent = `${summary.time}s`;
@@ -312,13 +345,18 @@ function renderTable() {
            host.vendor.toLowerCase().includes(filterVal) ||
            host.os.toLowerCase().includes(filterVal) ||
            (host.vm || '').toLowerCase().includes(filterVal) ||
-           (host.adDomain || '').toLowerCase().includes(filterVal);
+           (host.adDomain || '').toLowerCase().includes(filterVal) ||
+           (host.vlan || '').toLowerCase().includes(filterVal) ||
+           (host.subnet || '').toLowerCase().includes(filterVal) ||
+           ((host.isDMZ ? 'dmz' : '')).toLowerCase().includes(filterVal) ||
+           (host.environment || '').toLowerCase().includes(filterVal) ||
+           (host.deviceType || '').toLowerCase().includes(filterVal);
   });
 
   if (filtered.length === 0) {
     resultsBody.innerHTML = `
       <tr class="empty-row">
-        <td colspan="9">Nenhum host corresponde aos filtros ou à varredura atual.</td>
+        <td colspan="14">Nenhum host corresponde aos filtros ou à varredura atual.</td>
       </tr>
     `;
     return;
@@ -349,12 +387,17 @@ function renderTable() {
       <td><strong>${host.ip}</strong></td>
       <td><span class="state-badge ${statusClass}">${host.status}</span></td>
       <td>${host.hostname}</td>
-      <td><code>${host.mac}</code></td>
-      <td>${host.vendor}</td>
+      <td><code>${host.mac || 'N/A'}</code></td>
+      <td class="manufacturer-cell">${host.vendor || 'N/A'}</td>
       <td>${host.os}</td>
       <td>${vmBadge}</td>
       <td>${host.adDomain || 'N/A'}</td>
-      <td>${portsHtml}</td>
+      <td>${host.vlan || 'N/A'}</td>
+      <td>${host.subnet || 'N/A'}</td>
+      <td>${host.isDMZ ? '<span class="state-badge dmz">Sim</span>' : '<span class="text-muted">Não</span>'}</td>
+      <td>${host.environment || 'IT'}</td>
+      <td>${host.deviceType || 'Host Ativo'}</td>
+      <td><div class="ports-list">${portsHtml}</div></td>
     `;
     resultsBody.appendChild(row);
   });
@@ -365,7 +408,7 @@ function updateHostRow(host) {
   const rowId = `row-${host.ip.replace(/\./g, '_')}`;
   const row = document.getElementById(rowId);
   if (row) {
-    const portsCell = row.cells[8];
+    const portsCell = row.cells[13];
     if (portsCell) {
       let portsHtml = '';
       if (host.ports && host.ports.length > 0) {
@@ -436,7 +479,7 @@ async function exportToExcel() {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   } catch (err) {
-    appendLog(`[!] Erro ao exportar Excel: ${err.message}`);
+    logToConsole(`[!] Erro ao exportar Excel: ${err.message}`, 'error-msg');
   }
 }
 
@@ -462,12 +505,12 @@ function sortTable(columnIndex) {
         valB = b.hostname.toLowerCase();
         break;
       case 3:
-        valA = a.mac.toLowerCase();
-        valB = b.mac.toLowerCase();
+        valA = (a.mac || '').toLowerCase();
+        valB = (b.mac || '').toLowerCase();
         break;
       case 4:
-        valA = a.vendor.toLowerCase();
-        valB = b.vendor.toLowerCase();
+        valA = (a.vendor || '').toLowerCase();
+        valB = (b.vendor || '').toLowerCase();
         break;
       case 5:
         valA = a.os.toLowerCase();
@@ -481,6 +524,26 @@ function sortTable(columnIndex) {
         valA = (a.adDomain || '').toLowerCase();
         valB = (b.adDomain || '').toLowerCase();
         break;
+      case 8:
+        valA = (a.vlan || '').toLowerCase();
+        valB = (b.vlan || '').toLowerCase();
+        break;
+      case 9:
+        valA = (a.subnet || '').toLowerCase();
+        valB = (b.subnet || '').toLowerCase();
+        break;
+      case 10:
+        valA = a.isDMZ ? 'sim' : 'nao';
+        valB = b.isDMZ ? 'sim' : 'nao';
+        break;
+      case 11:
+        valA = (a.environment || '').toLowerCase();
+        valB = (b.environment || '').toLowerCase();
+        break;
+      case 12:
+        valA = (a.deviceType || '').toLowerCase();
+        valB = (b.deviceType || '').toLowerCase();
+        break;
     }
     
     if (valA < valB) return sortDirection ? -1 : 1;
@@ -493,8 +556,226 @@ function sortTable(columnIndex) {
 
 // Event Listeners initialization
 startBtn.addEventListener('click', startScan);
+stopBtn.addEventListener('click', stopScan);
 exportBtn.addEventListener('click', exportToExcel);
 clearBtn.addEventListener('click', clearConsole);
+
+const mapBtn = document.getElementById('map-btn');
+const mapModal = document.getElementById('map-modal');
+const mapBackdrop = document.getElementById('map-backdrop');
+const mapCloseBtn = document.getElementById('map-close-btn');
+const mapExportPng = document.getElementById('map-export-png');
+const mapExportSvg = document.getElementById('map-export-svg');
+
+let networkInstance = null;
+let latestTopology = null;
+
+// Only add event listeners if elements exist
+if (mapBtn && mapModal && mapBackdrop && mapCloseBtn) {
+  mapBtn.addEventListener('click', () => {
+    renderNetworkMap();
+    mapModal.classList.remove('hidden');
+  });
+
+  mapBackdrop.addEventListener('click', () => {
+    closeMap();
+  });
+
+  mapCloseBtn.addEventListener('click', () => {
+    closeMap();
+  });
+}
+
+if (mapExportPng && mapExportSvg) {
+  mapExportPng.addEventListener('click', () => exportMapImage('png'));
+  mapExportSvg.addEventListener('click', () => exportMapImage('svg'));
+}
+
+function closeMap() {
+  mapModal.classList.add('hidden');
+  if (networkInstance) {
+    try { networkInstance.destroy(); } catch (e) {}
+    networkInstance = null;
+  }
+}
+
+function exportMapImage(format) {
+  if (!networkInstance || !latestTopology) {
+    logToConsole('[!] Mapa indisponível para exportação.', 'error-msg');
+    return;
+  }
+
+  const canvas = document.querySelector('#map-canvas canvas');
+  if (!canvas) {
+    logToConsole('[!] Canvas do mapa não encontrado.', 'error-msg');
+    return;
+  }
+
+  if (format === 'png') {
+    const url = canvas.toDataURL('image/png');
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `topologia_rede_${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    return;
+  }
+
+  if (format === 'svg') {
+    const svgText = generateSvgExport();
+    if (!svgText) {
+      logToConsole('[!] Não foi possível gerar SVG do mapa.', 'error-msg');
+      return;
+    }
+    const blob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `topologia_rede_${new Date().toISOString().replace(/[:.]/g, '-')}.svg`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+}
+
+function generateSvgExport() {
+  if (!networkInstance || !latestTopology) return null;
+
+  const positions = networkInstance.getPositions();
+  const padding = 50;
+  const points = Object.values(positions);
+  if (points.length === 0) return null;
+
+  let minX = Math.min(...points.map(p => p.x));
+  let maxX = Math.max(...points.map(p => p.x));
+  let minY = Math.min(...points.map(p => p.y));
+  let maxY = Math.max(...points.map(p => p.y));
+  const width = Math.round(maxX - minX + padding * 2);
+  const height = Math.round(maxY - minY + padding * 2);
+
+  const getPoint = (id) => {
+    const pos = positions[id];
+    return {
+      x: Math.round(pos.x - minX + padding),
+      y: Math.round(pos.y - minY + padding)
+    };
+  };
+
+  const escapeXml = (str) => str.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+  const edgeSvg = latestTopology.edges.map(edge => {
+    const from = getPoint(edge.from);
+    const to = getPoint(edge.to);
+    return `<line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" stroke="#888" stroke-width="2" opacity="0.75"/>`;
+  }).join('');
+
+  const nodeSvg = latestTopology.nodes.map(node => {
+    const pos = getPoint(node.id);
+    const fill = (node.color && node.color.background) || '#4facfe';
+    return `
+      <g>
+        <circle cx="${pos.x}" cy="${pos.y}" r="18" fill="${fill}" stroke="#fff" stroke-width="2" opacity="0.95" />
+        <text x="${pos.x}" y="${pos.y + 5}" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="10" fill="#fff">${escapeXml(node.label)}</text>
+      </g>`;
+  }).join('');
+
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">\n  <rect width="100%" height="100%" fill="#05070a" />\n  ${edgeSvg}\n  ${nodeSvg}\n</svg>`;
+}
+
+function renderNetworkMap() {
+  const { nodes, edges } = buildTopologyFromResults(scanResults);
+  latestTopology = { nodes, edges };
+
+  const container = document.getElementById('map-canvas');
+  container.innerHTML = '';
+
+  if (nodes.length === 0) {
+    container.innerHTML = '<div class="terminal-line error-msg">Nenhum resultado de varredura disponível para gerar o mapa.</div>';
+    return;
+  }
+
+  const data = {
+    nodes: new vis.DataSet(nodes),
+    edges: new vis.DataSet(edges)
+  };
+
+  const options = {
+    nodes: {
+      shape: 'dot',
+      size: 18,
+      font: { color: '#ffffff' }
+    },
+    edges: {
+      color: { color: '#888' },
+      smooth: { type: 'cubicBezier' }
+    },
+    physics: {
+      stabilization: true,
+      barnesHut: { gravitationalConstant: -2000, centralGravity: 0.3 }
+    },
+    interaction: { hover: true, tooltipDelay: 100 }
+  };
+
+  networkInstance = new vis.Network(container, data, options);
+
+  networkInstance.on('click', (params) => {
+    if (params.nodes && params.nodes.length > 0) {
+      const nodeId = params.nodes[0];
+      const node = nodes.find(n => n.id === nodeId);
+      if (node && node.data && node.data.ip) {
+        // Scroll table to host row
+        const row = document.getElementById(`row-${node.data.ip.replace(/\./g, '_')}`);
+        if (row) {
+          row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          row.classList.add('highlight-row');
+          setTimeout(() => row.classList.remove('highlight-row'), 2500);
+        }
+      }
+    }
+  });
+}
+
+function buildTopologyFromResults(results) {
+  const nodes = [];
+  const edges = [];
+
+  // Map VLAN/subnet groups to colors
+  const vlanMap = {};
+  const vlanColors = ['#4facfe','#00f2fe','#10b981','#f59e0b','#ef4444','#8b5cf6','#fb7185'];
+  let vlanIdx = 0;
+
+  // Create subnet nodes
+  const subnets = {};
+  results.forEach(h => {
+    const subnet = h.subnet || 'unknown';
+    if (!subnets[subnet]) subnets[subnet] = { id: `subnet:${subnet}`, hosts: [] };
+    subnets[subnet].hosts.push(h);
+  });
+
+  Object.keys(subnets).forEach((subnet, idx) => {
+    nodes.push({ id: `subnet:${subnet}`, label: subnet, shape: 'box', color: '#222', font: { color: '#fff' }, data: { subnet } });
+  });
+
+  // Host nodes
+  results.forEach(host => {
+    const id = `host:${host.ip}`;
+    const label = `${host.ip}\n${host.hostname !== 'N/A' ? host.hostname : ''}`;
+    const vlan = host.vlan || 'default';
+    if (!vlanMap[vlan]) vlanMap[vlan] = vlanColors[vlanIdx++ % vlanColors.length];
+
+    const color = host.environment === 'OT/ICS' ? '#ff8a65' : (host.isDMZ ? '#f59e0b' : vlanMap[vlan]);
+
+    nodes.push({ id, label, title: `${host.ip}\n${host.vendor}\n${host.os}`, group: vlan, color: { background: color }, data: { ip: host.ip, host } });
+
+    // Edge to subnet
+    const subnetId = `subnet:${host.subnet || 'unknown'}`;
+    edges.push({ from: id, to: subnetId });
+  });
+
+  return { nodes, edges };
+}
 
 // Initialize Websocket connection on page load
 connectWebSocket();

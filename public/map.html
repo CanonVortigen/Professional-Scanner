@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mapa de Topologia - NetScan CIMED</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="glass-bg-decor decor-1"></div>
+  <div class="glass-bg-decor decor-2"></div>
+  <div class="glass-bg-decor decor-3"></div>
+
+  <div class="app-container">
+    <section class="glass-panel map-page-panel">
+      <div class="panel-header">
+        <span class="icon">🗺️</span>
+        <h2>Mapa de Topologia de Rede</h2>
+      </div>
+
+      <div class="map-page-actions" style="padding: 0 24px 18px; display:flex; gap: 10px; align-items:center; flex-wrap:wrap;">
+        <button id="map-refresh-btn" class="btn btn-primary">Atualizar</button>
+        <button id="map-export-png" class="btn btn-secondary">Exportar PNG</button>
+        <button id="map-export-svg" class="btn btn-secondary">Exportar SVG</button>
+        <a href="/" class="btn btn-tertiary">Voltar ao Scanner</a>
+        <span id="map-status" class="metric" style="margin-left:auto; color: var(--accent);">Carregando...</span>
+      </div>
+
+      <div id="map-page-canvas" class="map-canvas" style="margin: 0 24px 24px; min-height: 70vh;"></div>
+    </section>
+  </div>
+
+  <footer class="app-footer">
+    <p>&copy; 2026 NetScan CIMED. Visualizador de topologia.</p>
+  </footer>
+
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <script src="map.js"></script>
+</body>
+</html>

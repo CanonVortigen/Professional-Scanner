@@ -36,7 +36,7 @@
         </div>
       </div>
       <div class="header-status">
-        <div id="connection-badge" class="badge badge-disconnected">Desconectado</div>
+        <div id="connection-badge" class="badge badge-connecting">Conectando...</div>
       </div>
     </header>
 
@@ -121,8 +121,14 @@
               <span class="btn-text">Iniciar Varredura</span>
               <span class="loader hidden"></span>
             </button>
+            <button type="button" id="stop-btn" class="btn btn-secondary" disabled>
+              Parar Varredura
+            </button>
             <button type="button" id="export-btn" class="btn btn-secondary" disabled>
               Exportar Excel
+            </button>
+            <button type="button" id="map-btn" class="btn btn-secondary">
+              Mostrar Mapa
             </button>
           </div>
         </form>
@@ -168,7 +174,7 @@
           <h2><span class="icon">📊</span> Dispositivos Descobertos</h2>
         </div>
         <div class="results-filter">
-          <input type="text" id="search-input" placeholder="🔍 Filtrar resultados (IP, Nome, OS, MAC...)" onkeyup="filterResults()">
+          <input type="text" id="search-input" placeholder="🔍 Filtrar resultados (IP, Nome, OS...)" onkeyup="filterResults()">
         </div>
       </div>
 
@@ -195,20 +201,25 @@
         <table id="results-table">
           <thead>
             <tr>
-              <th onclick="sortTable(0)">Endereço IP ↕</th>
-              <th onclick="sortTable(1)">Estado ↕</th>
-              <th onclick="sortTable(2)">Hostname ↕</th>
-              <th onclick="sortTable(3)">Endereço MAC ↕</th>
-              <th onclick="sortTable(4)">Fabricante ↕</th>
-              <th onclick="sortTable(5)">Sistema Operacional ↕</th>
-              <th onclick="sortTable(6)">VM ↕</th>
-              <th onclick="sortTable(7)">Domínio AD ↕</th>
-              <th>Portas Abertas / Serviços Detectados</th>
+              <th onclick="sortTable(0)"><span class="column-title">Endereço<br><span class="column-subtitle">IP</span></span></th>
+              <th onclick="sortTable(1)">Estado</th>
+              <th onclick="sortTable(2)">Hostname</th>
+              <th onclick="sortTable(3)"><span class="column-title">Endereço<br><span class="column-subtitle">MAC</span></span></th>
+              <th onclick="sortTable(4)">Fabricante</th>
+              <th onclick="sortTable(5)"><span class="column-title">Sistema<br><span class="column-subtitle">Operacional</span></span></th>
+              <th onclick="sortTable(6)">VM</th>
+              <th onclick="sortTable(7)"><span class="column-title">Domínio<br><span class="column-subtitle">AD</span></span></th>
+              <th onclick="sortTable(8)">VLAN</th>
+              <th onclick="sortTable(9)">Sub-rede</th>
+              <th onclick="sortTable(10)">DMZ</th>
+              <th onclick="sortTable(11)">Ambiente</th>
+              <th onclick="sortTable(12)">Tipo</th>
+              <th>Portas</th>
             </tr>
           </thead>
           <tbody id="results-body">
             <tr class="empty-row">
-              <td colspan="9">Nenhum dado de varredura disponível. Configure o scanner acima para iniciar.</td>
+              <td colspan="14">Nenhum dado de varredura disponível. Configure o scanner acima para iniciar.</td>
             </tr>
           </tbody>
         </table>
@@ -220,6 +231,23 @@
     <p>&copy; 2026 NetScan CIMED. Desenvolvido por Alessandro.</p>
   </footer>
 
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
   <script src="app.js"></script>
+
+  <!-- Map Modal -->
+  <div id="map-modal" class="hidden map-modal">
+    <div class="map-modal-backdrop" id="map-backdrop"></div>
+    <div class="map-modal-content">
+      <div class="map-modal-header">
+        <h3>Mapa de Topologia de Rede</h3>
+        <div class="map-modal-actions">
+          <button id="map-export-png" class="btn btn-secondary">Exportar PNG</button>
+          <button id="map-export-svg" class="btn btn-secondary">Exportar SVG</button>
+          <button id="map-close-btn" class="btn btn-tertiary">Fechar</button>
+        </div>
+      </div>
+      <div id="map-canvas" class="map-canvas"></div>
+    </div>
+  </div>
 </body>
 </html>
