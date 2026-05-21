@@ -1,0 +1,28 @@
+# Ignore Python virtual environments and caches
+venv/
+env/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Ignore node modules
+node_modules/
+
+# Logs and temp files
+*.log
+*.tmp
+
+# IDE/editor folders
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# pipenv
+Pipfile.lock
+
+# build directories
+build/
+dist/
+.eggs/

@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NetScan CIMED - Varredura de Rede Multi-thread</title>
+  <!-- Google Fonts: Plus Jakarta Sans for UI, JetBrains Mono for Code/Logs -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="glass-bg-decor decor-1"></div>
+  <div class="glass-bg-decor decor-2"></div>
+  <div class="glass-bg-decor decor-3"></div>
+
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="logo-area">
+        <div class="logo-icon">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 2C6.48 2 2 6.48 2 12C2 17.52 6.48 22 12 22C17.52 22 22 17.52 22 12C22 6.48 17.52 2 12 2ZM13 17H11V15H13V17ZM13 13H11V7H13V13Z" fill="url(#logo-grad)"/>
+            <defs>
+              <linearGradient id="logo-grad" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#00f2fe"/>
+                <stop offset="1" stop-color="#4facfe"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <div class="logo-text">
+          <h1>NetScan <span>CIMED</span></h1>
+          <p>Varredura de Rede Multi-thread Profissional</p>
+        </div>
+      </div>
+      <div class="header-status">
+        <div id="connection-badge" class="badge badge-disconnected">Desconectado</div>
+      </div>
+    </header>
+
+    <!-- Main Section (Side-by-Side) -->
+    <main class="scan-grid">
+      <!-- Coluna Esquerda: Configuração -->
+      <section class="glass-panel config-panel">
+        <div class="panel-header">
+          <span class="icon">⚙️</span>
+          <h2>Parâmetros de Busca</h2>
+        </div>
+
+        <form id="scan-form" onsubmit="return false;">
+          <!-- Target Input -->
+          <div class="form-group">
+            <label for="target-input">Endereço IP, Faixa ou CIDR</label>
+            <input type="text" id="target-input" placeholder="Ex: 192.168.1.1 ou 192.168.1.1-50 ou 192.168.1.0/24" required>
+            <div class="input-helper">
+              Sugestões: 
+              <span class="suggestion-link" onclick="fillTarget('127.0.0.1')">Localhost</span> | 
+              <span class="suggestion-link" onclick="fillTarget('192.168.1.1')">Gateway padrão</span> |
+              <span class="suggestion-link" onclick="fillTarget('192.168.1.1-15')">Faixa curta</span>
+            </div>
+          </div>
+
+          <!-- Port Scan Options -->
+          <div class="form-group">
+            <label for="ports-preset">Varredura de Portas (TCP)</label>
+            <select id="ports-preset" onchange="toggleCustomPorts()">
+              <option value="none">Apenas Descoberta de Hosts (Rápido)</option>
+              <option value="common" selected>Portas Comuns (21, 22, 23, 25, 80, 443, 445, 3389, 8080)</option>
+              <option value="web">Serviços Web (80, 443, 8080)</option>
+              <option value="custom">Personalizado...</option>
+            </select>
+          </div>
+
+          <!-- Custom TCP Ports (hidden initially unless selected) -->
+          <div id="custom-ports-group" class="form-group hidden">
+            <label for="custom-ports-input">Especificar Portas TCP (separadas por vírgula)</label>
+            <input type="text" id="custom-ports-input" placeholder="Ex: 22, 80, 443, 3306, 8080">
+          </div>
+
+          <!-- UDP Scan Option -->
+          <div class="form-group checkbox-group">
+            <label class="switch">
+              <input type="checkbox" id="scan-udp-checkbox">
+              <span class="slider round"></span>
+            </label>
+            <span class="checkbox-label">Varredura de Portas UDP Comuns (53, 123, 161)</span>
+          </div>
+
+          <!-- Performance & Details Settings -->
+          <div class="row">
+            <div class="col">
+              <div class="form-group">
+                <label for="concurrency-input">Threads (Concorrência)</label>
+                <select id="concurrency-input">
+                  <option value="5">5 (Lento - Seguro)</option>
+                  <option value="10">10 (Normal)</option>
+                  <option value="25">25 (Recomendado)</option>
+                  <option value="50" selected>50 (Rápido)</option>
+                  <option value="100">100 (Turbo)</option>
+                </select>
+              </div>
+            </div>
+            <div class="col">
+              <div class="form-group">
+                <label for="timeout-input">Timeout (ms)</label>
+                <select id="timeout-input">
+                  <option value="300">300 ms (Super Rápido)</option>
+                  <option value="600" selected>600 ms (Equilibrado)</option>
+                  <option value="1200">1200 ms (Mais Preciso)</option>
+                  <option value="2000">2000 ms (Redes Lentas)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Action Buttons -->
+          <div class="form-actions">
+            <button type="button" id="start-btn" class="btn btn-primary">
+              <span class="btn-text">Iniciar Varredura</span>
+              <span class="loader hidden"></span>
+            </button>
+            <button type="button" id="export-btn" class="btn btn-secondary" disabled>
+              Exportar Excel
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Coluna Direita: Console / Logs em Tempo Real -->
+      <section class="glass-panel console-panel">
+        <div class="panel-header console-header">
+          <div class="header-left">
+          <h2><span class="icon">💻</span> Terminal de Progresso</h2>
+        </div>
+          <div class="console-metrics">
+            <span id="scan-timer" class="metric">0.00s</span>
+          </div>
+        </div>
+
+        <!-- Barra de Progresso do Scan -->
+        <div class="progress-bar-container hidden" id="progress-container">
+          <div class="progress-track">
+            <div class="progress-fill" id="progress-bar"></div>
+          </div>
+          <span class="progress-percentage" id="progress-text">0%</span>
+        </div>
+        
+        <div class="console-wrapper">
+          <div id="console-output" class="console-output">
+            <div class="terminal-line system-msg">[i] Pronto para iniciar a varredura de rede. Insira o IP e clique em "Iniciar Varredura".</div>
+          </div>
+        </div>
+
+        <div class="console-actions">
+          <button type="button" id="clear-btn" class="btn btn-tertiary">
+            Limpar Console
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <!-- Seção Inferior: Tabela de Resultados -->
+    <section class="glass-panel results-panel">
+      <div class="panel-header results-header">
+        <div class="header-left">
+          <h2><span class="icon">📊</span> Dispositivos Descobertos</h2>
+        </div>
+        <div class="results-filter">
+          <input type="text" id="search-input" placeholder="🔍 Filtrar resultados (IP, Nome, OS, MAC...)" onkeyup="filterResults()">
+        </div>
+      </div>
+
+      <div class="results-stats">
+        <div class="stat-card">
+          <span class="stat-title">Total Escaneado</span>
+          <span id="stat-total" class="stat-value">0</span>
+        </div>
+        <div class="stat-card active-card">
+          <span class="stat-title">Hosts Ativos</span>
+          <span id="stat-active" class="stat-value text-success">0</span>
+        </div>
+        <div class="stat-card inactive-card">
+          <span class="stat-title">Hosts Inativos</span>
+          <span id="stat-inactive" class="stat-value text-danger">0</span>
+        </div>
+        <div class="stat-card time-card">
+          <span class="stat-title">Tempo Total</span>
+          <span id="stat-time" class="stat-value text-accent">0.00s</span>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table id="results-table">
+          <thead>
+            <tr>
+              <th onclick="sortTable(0)">Endereço IP ↕</th>
+              <th onclick="sortTable(1)">Estado ↕</th>
+              <th onclick="sortTable(2)">Hostname ↕</th>
+              <th onclick="sortTable(3)">Endereço MAC ↕</th>
+              <th onclick="sortTable(4)">Fabricante ↕</th>
+              <th onclick="sortTable(5)">Sistema Operacional ↕</th>
+              <th onclick="sortTable(6)">VM ↕</th>
+              <th onclick="sortTable(7)">Domínio AD ↕</th>
+              <th>Portas Abertas / Serviços Detectados</th>
+            </tr>
+          </thead>
+          <tbody id="results-body">
+            <tr class="empty-row">
+              <td colspan="9">Nenhum dado de varredura disponível. Configure o scanner acima para iniciar.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <footer class="app-footer">
+    <p>&copy; 2026 NetScan CIMED. Desenvolvido por Alessandro.</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
