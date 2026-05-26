@@ -204,22 +204,20 @@
               <th onclick="sortTable(0)"><span class="column-title">Endereço<br><span class="column-subtitle">IP</span></span></th>
               <th onclick="sortTable(1)">Estado</th>
               <th onclick="sortTable(2)">Hostname</th>
-              <th onclick="sortTable(3)"><span class="column-title">Endereço<br><span class="column-subtitle">MAC</span></span></th>
-              <th onclick="sortTable(4)">Fabricante</th>
-              <th onclick="sortTable(5)"><span class="column-title">Sistema<br><span class="column-subtitle">Operacional</span></span></th>
-              <th onclick="sortTable(6)">VM</th>
-              <th onclick="sortTable(7)"><span class="column-title">Domínio<br><span class="column-subtitle">AD</span></span></th>
-              <th onclick="sortTable(8)">VLAN</th>
-              <th onclick="sortTable(9)">Sub-rede</th>
-              <th onclick="sortTable(10)">DMZ</th>
-              <th onclick="sortTable(11)">Ambiente</th>
-              <th onclick="sortTable(12)">Tipo</th>
+              <th onclick="sortTable(3)"><span class="column-title">Sistema<br><span class="column-subtitle">Operacional</span></span></th>
+              <th onclick="sortTable(4)">VM</th>
+              <th onclick="sortTable(5)"><span class="column-title">Domínio<br><span class="column-subtitle">AD</span></span></th>
+              <th onclick="sortTable(6)">VLAN</th>
+              <th onclick="sortTable(7)">Sub-rede</th>
+              <th onclick="sortTable(8)">DMZ</th>
+              <th onclick="sortTable(9)">Ambiente</th>
+              <th onclick="sortTable(10)">Tipo</th>
               <th>Portas</th>
             </tr>
           </thead>
           <tbody id="results-body">
             <tr class="empty-row">
-              <td colspan="14">Nenhum dado de varredura disponível. Configure o scanner acima para iniciar.</td>
+              <td colspan="12">Nenhum dado de varredura disponível. Configure o scanner acima para iniciar.</td>
             </tr>
           </tbody>
         </table>
@@ -234,20 +232,5 @@
   <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
   <script src="app.js"></script>
 
-  <!-- Map Modal -->
-  <div id="map-modal" class="hidden map-modal">
-    <div class="map-modal-backdrop" id="map-backdrop"></div>
-    <div class="map-modal-content">
-      <div class="map-modal-header">
-        <h3>Mapa de Topologia de Rede</h3>
-        <div class="map-modal-actions">
-          <button id="map-export-png" class="btn btn-secondary">Exportar PNG</button>
-          <button id="map-export-svg" class="btn btn-secondary">Exportar SVG</button>
-          <button id="map-close-btn" class="btn btn-tertiary">Fechar</button>
-        </div>
-      </div>
-      <div id="map-canvas" class="map-canvas"></div>
-    </div>
-  </div>
 </body>
 </html>

@@ -638,11 +638,10 @@ input:checked + .slider:before {
 
 table {
   width: 100%;
-  min-width: 1700px;
-  table-layout: fixed;
+  min-width: 1000px;
+  table-layout: auto;
   border-collapse: separate;
   border-spacing: 0;
-  text-align: left;
   font-size: 0.9rem;
   color: var(--text-primary);
 }
@@ -650,12 +649,12 @@ table {
 th, td {
   padding: 16px 18px;
   border-bottom: 1px solid var(--border-color);
-  vertical-align: middle;
-  word-break: normal;
-  white-space: nowrap;
+  vertical-align: top;
+  word-break: break-word;
+  white-space: normal;
   overflow: hidden;
   text-overflow: ellipsis;
-  text-align: left;
+  text-align: center;
 }
 
 th .column-title {
@@ -770,13 +769,22 @@ tbody tr:hover {
 
 .ports-list {
   display: flex;
-  flex-wrap: nowrap;
-  gap: 6px;
-  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-start;
+  justify-content: center;
   overflow-x: auto;
   padding-bottom: 2px;
-  min-width: 340px;
+  min-width: 0;
   max-width: 100%;
+}
+
+.port-badge {
+  white-space: nowrap;
+}
+
+td:last-child {
+  min-width: 260px;
 }
 
 .ports-list::-webkit-scrollbar {
@@ -894,58 +902,6 @@ th:last-child {
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--accent);
-
-/* Map Modal Styles */
-.map-modal {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 60;
-}
-
-.map-modal-backdrop {
-  position: absolute;
-  inset: 0;
-  background: rgba(2,6,23,0.7);
-}
-
-.map-modal-content {
-  position: relative;
-  width: 90%;
-  max-width: 1200px;
-  height: 80vh;
-  background: var(--bg-panel);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  box-shadow: var(--panel-shadow);
-  overflow: hidden;
-  z-index: 61;
-  display: flex;
-  flex-direction: column;
-}
-
-.map-modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.map-modal-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.map-canvas {
-  flex: 1;
-  background: linear-gradient(180deg, rgba(0,0,0,0.25), rgba(0,0,0,0.15));
-}
-  min-width: 42px;
-  text-align: right;
 }
 
 @keyframes barFadeIn {

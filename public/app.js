@@ -341,8 +341,6 @@ function renderTable() {
     return host.ip.toLowerCase().includes(filterVal) ||
            host.status.toLowerCase().includes(filterVal) ||
            host.hostname.toLowerCase().includes(filterVal) ||
-           host.mac.toLowerCase().includes(filterVal) ||
-           host.vendor.toLowerCase().includes(filterVal) ||
            host.os.toLowerCase().includes(filterVal) ||
            (host.vm || '').toLowerCase().includes(filterVal) ||
            (host.adDomain || '').toLowerCase().includes(filterVal) ||
@@ -387,8 +385,6 @@ function renderTable() {
       <td><strong>${host.ip}</strong></td>
       <td><span class="state-badge ${statusClass}">${host.status}</span></td>
       <td>${host.hostname}</td>
-      <td><code>${host.mac || 'N/A'}</code></td>
-      <td class="manufacturer-cell">${host.vendor || 'N/A'}</td>
       <td>${host.os}</td>
       <td>${vmBadge}</td>
       <td>${host.adDomain || 'N/A'}</td>
@@ -408,7 +404,7 @@ function updateHostRow(host) {
   const rowId = `row-${host.ip.replace(/\./g, '_')}`;
   const row = document.getElementById(rowId);
   if (row) {
-    const portsCell = row.cells[13];
+    const portsCell = row.cells[11];
     if (portsCell) {
       let portsHtml = '';
       if (host.ports && host.ports.length > 0) {
@@ -420,7 +416,7 @@ function updateHostRow(host) {
       } else {
         portsHtml = '<span class="text-muted">Nenhuma porta aberta encontrada</span>';
       }
-      portsCell.innerHTML = portsHtml;
+      portsCell.innerHTML = `<div class="ports-list">${portsHtml}</div>`;
     }
   }
 }
@@ -446,40 +442,28 @@ function clearConsole() {
   consoleOutput.innerHTML = '<div class="terminal-line system-msg">[i] Console limpo. Pronto para nova varredura.</div>';
 }
 
-// Export Results to Excel
-async function exportToExcel() {
+// Export Results to JSON (client-side download)
+function exportToJson() {
   if (scanResults.length === 0) return;
 
   try {
-    const response = await fetch('/export-xlsx', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ results: scanResults })
-    });
-
-    if (!response.ok) {
-      throw new Error(`Falha ao gerar Excel: ${response.statusText}`);
-    }
-
-    const blob = await response.blob();
+    const payload = { updated: new Date().toISOString(), results: scanResults };
+    const text = JSON.stringify(payload, null, 2);
+    const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', url);
+    link.href = url;
 
     const now = new Date();
     const dateStr = now.toISOString().slice(0, 10);
     const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, '-');
-    link.setAttribute('download', `redes_scan_${dateStr}_${timeStr}.xlsx`);
-
-    link.style.visibility = 'hidden';
+    link.download = `redes_scan_${dateStr}_${timeStr}.json`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   } catch (err) {
-    logToConsole(`[!] Erro ao exportar Excel: ${err.message}`, 'error-msg');
+    logToConsole(`[!] Erro ao exportar JSON: ${err.message}`, 'error-msg');
   }
 }
 
@@ -505,42 +489,34 @@ function sortTable(columnIndex) {
         valB = b.hostname.toLowerCase();
         break;
       case 3:
-        valA = (a.mac || '').toLowerCase();
-        valB = (b.mac || '').toLowerCase();
-        break;
-      case 4:
-        valA = (a.vendor || '').toLowerCase();
-        valB = (b.vendor || '').toLowerCase();
-        break;
-      case 5:
         valA = a.os.toLowerCase();
         valB = b.os.toLowerCase();
         break;
-      case 6:
+      case 4:
         valA = (a.vm || '').toLowerCase();
         valB = (b.vm || '').toLowerCase();
         break;
-      case 7:
+      case 5:
         valA = (a.adDomain || '').toLowerCase();
         valB = (b.adDomain || '').toLowerCase();
         break;
-      case 8:
+      case 6:
         valA = (a.vlan || '').toLowerCase();
         valB = (b.vlan || '').toLowerCase();
         break;
-      case 9:
+      case 7:
         valA = (a.subnet || '').toLowerCase();
         valB = (b.subnet || '').toLowerCase();
         break;
-      case 10:
+      case 8:
         valA = a.isDMZ ? 'sim' : 'nao';
         valB = b.isDMZ ? 'sim' : 'nao';
         break;
-      case 11:
+      case 9:
         valA = (a.environment || '').toLowerCase();
         valB = (b.environment || '').toLowerCase();
         break;
-      case 12:
+      case 10:
         valA = (a.deviceType || '').toLowerCase();
         valB = (b.deviceType || '').toLowerCase();
         break;
@@ -557,47 +533,25 @@ function sortTable(columnIndex) {
 // Event Listeners initialization
 startBtn.addEventListener('click', startScan);
 stopBtn.addEventListener('click', stopScan);
-exportBtn.addEventListener('click', exportToExcel);
+exportBtn.addEventListener('click', exportToJson);
 clearBtn.addEventListener('click', clearConsole);
-
-const mapBtn = document.getElementById('map-btn');
-const mapModal = document.getElementById('map-modal');
-const mapBackdrop = document.getElementById('map-backdrop');
-const mapCloseBtn = document.getElementById('map-close-btn');
-const mapExportPng = document.getElementById('map-export-png');
-const mapExportSvg = document.getElementById('map-export-svg');
 
 let networkInstance = null;
 let latestTopology = null;
 
-// Only add event listeners if elements exist
-if (mapBtn && mapModal && mapBackdrop && mapCloseBtn) {
-  mapBtn.addEventListener('click', () => {
-    renderNetworkMap();
-    mapModal.classList.remove('hidden');
-  });
-
-  mapBackdrop.addEventListener('click', () => {
-    closeMap();
-  });
-
-  mapCloseBtn.addEventListener('click', () => {
-    closeMap();
-  });
-}
-
-if (mapExportPng && mapExportSvg) {
-  mapExportPng.addEventListener('click', () => exportMapImage('png'));
-  mapExportSvg.addEventListener('click', () => exportMapImage('svg'));
-}
-
-function closeMap() {
-  mapModal.classList.add('hidden');
-  if (networkInstance) {
-    try { networkInstance.destroy(); } catch (e) {}
-    networkInstance = null;
+function initMapWindowListener() {
+  const mapBtn = document.getElementById('map-btn');
+  if (!mapBtn) {
+    console.warn('Map button not found for opening map window.');
+    return;
   }
+
+  mapBtn.addEventListener('click', () => {
+    window.open('/map', 'NetworkMap', 'width=1200,height=800,resizable=yes,scrollbars=yes');
+  });
 }
+
+window.addEventListener('DOMContentLoaded', initMapWindowListener);
 
 function exportMapImage(format) {
   if (!networkInstance || !latestTopology) {
@@ -705,20 +659,45 @@ function renderNetworkMap() {
     nodes: {
       shape: 'dot',
       size: 18,
-      font: { color: '#ffffff' }
+      font: { color: '#ffffff', size: 12, face: 'Plus Jakarta Sans' }
     },
     edges: {
-      color: { color: '#888' },
+      color: { color: '#8e96b5', highlight: '#f59e0b' },
+      width: 2,
       smooth: { type: 'cubicBezier' }
     },
-    physics: {
-      stabilization: true,
-      barnesHut: { gravitationalConstant: -2000, centralGravity: 0.3 }
+    layout: {
+      improvedLayout: true
     },
-    interaction: { hover: true, tooltipDelay: 100 }
+    physics: {
+      enabled: true,
+      stabilization: {
+        enabled: true,
+        iterations: 300,
+        updateInterval: 50
+      },
+      barnesHut: {
+        gravitationalConstant: -2000,
+        centralGravity: 0.18,
+        springLength: 180,
+        springConstant: 0.04,
+        damping: 0.09
+      }
+    },
+    interaction: {
+      hover: true,
+      tooltipDelay: 100,
+      dragView: true,
+      zoomView: true,
+      multiselect: false
+    }
   };
 
   networkInstance = new vis.Network(container, data, options);
+  networkInstance.once('stabilizationIterationsDone', () => {
+    networkInstance.fit({ animation: true, easingFunction: 'easeInOutQuad', duration: 600 });
+  });
+  networkInstance.on('resize', () => networkInstance.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } }));
 
   networkInstance.on('click', (params) => {
     if (params.nodes && params.nodes.length > 0) {
